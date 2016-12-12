@@ -1,45 +1,70 @@
 # queueing-tool
-A tool for scheduling multiple parallelized jobs to a machine. Jobs are scheduled according to a user's priority which depends on the requested hardware resources.
+A tool for scheduling multiple parallelized jobs to a machine. Communication of with the submitted jobs happens via TCP. At submission, all jobs register at a server process which then contacts the jobs if the are allowed to start or need to be stopped/deleted. Jobs are scheduled according to a priority that initially depends on the amount of requested resources and increases with the waiting time of the job.
 
 ################################################################################
 # (A) INSTALLATION                                                             #
 ################################################################################
 
-(1) run install.sh as root
+Copy the directory *queue* to any place you like. In principle, this queue can already be used now.
+The following tips may simplify the usage.
 
-(2) add the following line to /etc/sudoers (use visudo for editing)
+# (1) Starting the server automatically ########################################
 
-    ALL ALL=(ALL) NOPASSWD: /usr/queue/_wake.sh
+If the server should be started automatically, place the script *qserver_deamon*
+in */etc/init.d/* and run
+    
+    sudo update-rc.d qserver_daemon defaults
 
-(3) adjust the values in /usr/queue/queue.config
-   * threads [int]: the maximal number of threads used by the queue
-   * memory [int]: the maximal amount of memory (in MB) used by the queue
-   * gpus [int]: the number of CUDA capable gpus on the system (usually 0 or 1)
-   * abortOnTimeLimit [true/false]: if true abort jobs at time limit
-   * addUnkownUsers [true/false]: if true add a user when he first submits a job, else deny non-added users to submit jobs
-   * regeneration-factor [float]: specify how fast priorities recover if a user does not have any job in the queue (close to 0: slow, close to 1: fast)
-   * max-priority-class [int]: set highest priority class (see (C) for details)
+The server now is started directly while booting. You can also start/stop it by
+invoking */etc/init.d/qserver_deamon start/stop*.
+Note that you need to adjust the server arguments in the script for your needs.
+The respective block is marked with a *TODO*.
+
+# (2) Global access to the queue-commands  #####################################
+
+The queue-commands are located wherever you placed the *queue* directory.
+For direct access, it is recommended to add the following line to your .bashrc:
+
+    export PATH=/<your-queue-path>/queue:$PATH
+
+You might as well put a .sh file containing this line in /etc/profiles.d, so the
+path will be loaded for all users.
 
 
 ################################################################################
 # (B) USAGE                                                                    #
 ################################################################################
 
-# (1) queue-scripts ############################################################
+# (1) qserver ##################################################################
 
-The queue uses bash scripts that are organized in blocks. A block is a part
+The server manages all submitted jobs and distributes the available resources
+among them. On startup, these resources need to be specified with the following
+parameters:
+
+    --port PORT             port to listen on (default: 1234)
+    --gpus GPUS             comma separated list of available gpu device ids
+    --threads THREADS       number of available threads/cores
+    --memory MEMORY         available main memory in mb
+    --abort_on_time_limit   kill a job if its time limit is exceeded
+    
+If you use the *qserver_deamon*, you only need to specify the available resources
+once in the script you places in */etc/init.d*.
+
+
+# (2) queue-scripts ############################################################
+
+A queue job is specified by bash scripts that are organized in blocks. A block is a part
 of the script that forms an independent job and can be specified as follows:
 
-    #block(name=[jobname], threads=[num-threads], memory=[max-memory], subtasks=[num-subtasks], gpu=[true/false], hours=[time-limit])
+    #block(name=[jobname], threads=[num-threads], memory=[max-memory], subtasks=[num-subtasks], gpus=[num-gpus], hours=[time-limit])
 
 where
    * [name] is the name of the job (default: unknown-job)
    * [threads] is the number of threads to use (default: 1)
    * [memory] is the maximal amount of memory in mb for the job (default: 1024)
    * [subtasks] is the number of subtasks in the block, see below (default: 1)
-   * [gpu] specifies if a GPU should be used (default: false)
+   * [gpus] specifies the number of GPUs requested for the job (default: 0)
    * [time-limit] is the maximal runtime of the job in hours (default: 1)
-All numbers must be positive integers.
 
 Each block is scheduled [subtasks] times in parallel, which for instance allows
 for easy data parallelism. The subtask of the actual job is specified with the
@@ -62,90 +87,68 @@ Example:
       echo "processed block-2 after all subtasks of block-1"
 --------------------------------------------------------------------------------
 
-The first block has 10 subtasks that all process different data. The
-second block is not started before all subtasks of the first block are
-finished. Note that all block parameters that are not specified are set
-to the default values.
+The first block has 10 subtasks that all process different data. All of the 10 subjobs
+run in parallel if there are enough resources. The second block is not started before
+all subtasks of the first block are finished. Note that all block parameters that are not
+specified are set to the default values.
 
-In order to submit the above script, save it as exampleScript.sh and invoke
+When a job starts, a *q.log* directory is created and *stdout* and *stderr* are
+redirected into this file.
 
-     qsub exampleScript.sh
+In order to submit the above script, save it as *your-script-name.sh* and invoke
+
+     qsub your-script-name.sh [param1] [param2] [...]
+
 
 # (2) job status ###############################################################
 
 * 'r' (running): The requested resources have been allocated and the job runs.
-* 'p' (pending): The requested resources have been allocated but the job did not yet start. If a job is in status 'p' for more than a few seconds it is probably stuck and should be deleted.
 * 'w' (waiting): The requested resources could not yet be allocated and the job waits for execution.
 * 'h' (hold):    The job has to wait for other jobs to be finished before it can start.
 
 # (3) queue-commands ###########################################################
 
-* qsub [-r] [SCRIPT] [param1] [param2] ...
-  
-   Submits the script with optional parameters to the queue. Parameters can be accessed with $1, $2, etc. If the option -r is set, the jobs are not queued but run directly in your current terminal.
+** qsub **
+Submits the script with optional parameters to the queue. Parameters can be accessed with $1, $2, etc.
 
-* qstat [-v]
+    qsub [options...] SCRIPT [param1] [param2] ...
 
-   Prints all jobs that are currently submitted. If option -v is set, output is verbose, i.e. requested resources per job are also displayed.
+    Options:
+    -l, --local
+            Execute the script locally
+    -b BLOCK, --block BLOCK
+            Only submit/execute the specified block
+    -s SUBTASK SUBTASK, --subtask SUBTASK SUBTASK
+            Arguments for this option are a block name and a
+            subtask id.Only submit/execute the subtask id of the
+            specified block.
+    -f FROM_BLOCK, --from_block FROM_BLOCK
+            Submit/execute the specified block and all succeeding blocks
+    --server_ip SERVER_IP
+        Ip address of the server (default: localhost)
+    --server_port SERVER_PORT
+        Port of the server (default: 1234)
 
-* qdel [job-id-1|jobname-1] [job-id-2|jobname-2] [job-id-3|jobname-3] ...
+** qstat [-v] **
 
-   Deletes all jobs with the given ids or names. Multiple jobs at once can also be deleted with qdel [from]-[to], e.g. qdel 8-12 to delete the jobs with IDs 8, 9, 10, 11, 12. You can only delete your own jobs. If there are problems with other user's jobs, log in as root, change the environment variable USER to the name of the user and invoke qdel with the appropriate job-id.
+Prints all jobs that are currently submitted. If option -v is set, output is verbose, i.e. requested resources per job are also displayed.
 
-* qinfo
+** qdel **
 
-   Outputs some information about the current queue status.
+Deletes jobs from the queue. A job can only be deleted by its owner or by root. Usage:
 
-* qjobinfo [job-id]
+    qdel [-h] [--server_ip SERVER_IP] [--server_port SERVER_PORT] [-n | -u] jobs [jobs ...]
+    
+    Options:
+    jobs
+        Jobs to be deleted. Is a space separated list of job names, user names, or jod ids.
+        For ids (neither -n nor -u is specified), jobs ranges separated by a '-' are also possible.
+    --server_ip SERVER_IP
+        ip address of the server (default: localhost)
+    --server_port SERVER_PORT
+        port of the server (default: 1234)
+    -n
+        delete all jobs of the given names. Asterisks can be used as wildcards.
+    -u
+        delete all jobs of the given users. Asterisks can be used as wildcards.
 
-   Outputs detailed information for the given job.
-
-* qreset
-
-   Deletes the jobs of all users and resets the queue to its initial state. Needs root privileges.
-
-* qadduser [username] [priority-factor]
-
-   Adds the user [username] to the queue. The priority-factor determines an additional factor that may be used to boost specific users priorities (if greater than 1.0) or limit them (if smaller than 1.0), respectively. To change the priority-factor of an existing user, call qadduser with the respective user name and the new priority-factor. Needs root privileges.
-
-* qdeluser [username]
-
-   Deletes the user [username] from the queue. Needs root privileges
-
-
-The queue-commands are located in /usr/queue.
-For direct access, it is recommended to add the following line to your .bashrc:
-
-    export PATH=/usr/queue:$PATH
-
-You might as well put a .sh file containing this line in /etc/profiles.d, so the
-path will be loaded for all users.
-
-
-################################################################################
-# (C) SCHEDULING                                                               #
-################################################################################
-
-The scheduling strategy is based on user priorities. Each time a job starts,
-the owner's priority decreases.
-
-Each job gets a cost defined as follows:
-
-    cost = time-limit * max(relativeRequestedThreads, relativeRequestedMemory)
-
-For example, if a job requests 10GB, 3 threads, and 12 hours and the machine
-provides 30GB and 12 cores, the cost of the job is 12 * max(10/30, 3/12).
-The priorities are decreased based on the cost of a job.
-
-If a user does not submit a job for some time, his priorities regenerate
-based on the regeneration-factor and eventually may reach the maximal priority
-of 1.0 again.
-
-If the job with highest priority does not fit due to its requested resources, a
-job with lower priority may be started first to ensure efficient usage of the
-machine.
-To prevent a high priority job from waiting forever, each time another job
-with lower priority is preferred, the high priority job increases its priority
-class. If priority class [max-priority-class] is reached, no other jobs with
-lower priority are started until there are enough resources for the high
-priority job available.
