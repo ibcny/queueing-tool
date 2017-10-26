@@ -1,5 +1,9 @@
 #!/usr/bin/python2.7
 
+import subprocess
+import os
+import pwd
+import sys
 import socket
 import time
 import datetime
@@ -48,6 +52,7 @@ class Server(object):
     def __init__(self, port, gpus, threads, memory, abort_on_time_limit):
         # socket
         self.listener = socket.socket( socket.AF_INET,  socket.SOCK_STREAM )
+        # can: address reuse error?
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.listener.bind( ('localhost', port) )
         # resources
@@ -97,6 +102,13 @@ class Server(object):
         self.free_threads -= self.jobs[job_id].threads
         self.free_memory -= self.jobs[job_id].memory
         self.jobs[job_id].gpus = self.free_gpus[0:self.jobs[job_id].n_gpus]
+        
+        # what if self.jobs[job_id].gpus = null?
+        # cany: set CUDA GPUs as process exclusive
+        if self.jobs[job_id].n_gpus != 0:
+            p1 =subprocess.Popen(["nvidia-smi", "-i", ','.join([str(i) for i in self.jobs[job_id].gpus]), "-c", "3"])
+            p1.wait()
+
         self.free_gpus = self.free_gpus[self.jobs[job_id].n_gpus:]
         msg = 'run:' + ','.join( [str(i) for i in self.jobs[job_id].gpus] )
         self.send_msg(msg, self.jobs[job_id].address)
@@ -145,6 +157,11 @@ class Server(object):
             self.held_jobs.remove(job_id)
         ### delete a running job ###
         elif job_id in self.running_jobs:
+            # cany: set CUDA GPUs as process prohibitive
+            if job.n_gpus != 0 :
+                p1 =subprocess.Popen(["nvidia-smi", "-i", ','.join([str(i) for i in job.gpus]), "-c", "2"])
+                p1.wait()
+
             # free resources
             self.free_gpus = self.free_gpus + job.gpus
             self.free_memory = self.free_memory + job.memory
@@ -165,12 +182,22 @@ class Server(object):
         hours = int(fields[7])
         user = fields[8]
         depends_on = []
+        ViscomGID = 1041
+        uGroupId = pwd.getpwnam(user).pw_gid
+         
         if len(fields[9]) > 0:
             depends_on = [ int(i) for i in fields[9].split('+') ]
+        else: # can: regular users are allowed to keep one job in the queue. yet, subblocks are allowed!
+            if (user != 'valiyev') and (uGroupId != ViscomGID) :
+                for job_id_ in self.jobs:
+                    if  self.jobs[job_id_].user == user:
+                        return 'Error: Use sub-blocks or delete the job in the queue to submit a new job.'
+
         # check if job can be executed with the given resources
         if (memory > self.memory) or (threads > self.threads) or (n_gpus > len(self.gpus)):
-            reply = 'requested resources exceed resources reserved for the queue'
+            reply = 'Error: Requested resources exceed resources reserved for the queue'
         else: # put job into queue
+
             self.jobs[job_id] = Job(address, n_gpus, threads, memory, hours, name, user, depends_on)
             if len(depends_on) == 0:
                 self.waiting_jobs.append(job_id)
@@ -179,6 +206,7 @@ class Server(object):
             else:
                 self.held_jobs.append(job_id)
             reply = 'accept'
+        
         return reply
 
 
@@ -193,11 +221,13 @@ class Server(object):
     def qstat(self, connection, verbose = False):
         for job_id in sorted(self.running_jobs):
             connection.sendall(self.jobs[job_id].to_string(job_id, 'r', verbose))
+            connection.recv(1024) # wait for feedback
         for job_id in sorted(self.waiting_jobs):
             connection.sendall(self.jobs[job_id].to_string(job_id, 'w', verbose))
+            connection.recv(1024) # wait for feedback
         for job_id in sorted(self.held_jobs):
             connection.sendall(self.jobs[job_id].to_string(job_id, 'h', verbose))
-        connection.sendall('done')
+            connection.recv(1024) # wait for feedback
 
 
     def qdel(self, connection):
@@ -281,12 +311,29 @@ class Server(object):
 def main():
 
     arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument('--port', type=int, default=1234, help='port to listen on')
+    arg_parser.add_argument('--port', type=int, default=5090, help='port to listen on')
     arg_parser.add_argument('--gpus', type=str, default='', help='comma separated list of available gpu device ids')
     arg_parser.add_argument('--threads', type=int, default=1, help='number of available threads/cores')
     arg_parser.add_argument('--memory', type=int, default=4096, help='available main memory in mb')
     arg_parser.add_argument('--abort_on_time_limit', action='store_true', help='kill jobs if time limit is exceeded')
+    arg_parser.add_argument('--killall', type=int, default=1, help='kill all running processes on CUDA interface')
     args = arg_parser.parse_args()
+
+    # can killall running processes during initialization
+    if args.killall == 1:
+        # test this snippet
+        p1 = subprocess.Popen(["nvidia-smi", "--query-compute-apps=pid", "-i", args.gpus, "--format=csv,noheader"], stdout=subprocess.PIPE)
+        p1.wait()
+        p2 = subprocess.Popen(["xargs", "kill", "-9"], stdin=p1.stdout)
+        p2.wait()
+        p1.stdout.close()
+
+    # cany set all the GPUs to prohibited state
+    # first, set all gpus to default state
+    p1 = subprocess.Popen(["nvidia-smi", "-c", "0"])
+    p1.wait()
+    p2 = subprocess.Popen(["nvidia-smi", "-i", args.gpus, "-c", "2"])
+    p2.wait()
 
     gpus = []
     if not args.gpus == '':

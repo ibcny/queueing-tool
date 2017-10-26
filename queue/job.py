@@ -1,6 +1,7 @@
 #!/usr/bin/python2.7
 
 import subprocess
+import pwd
 import threading
 import os
 import signal
@@ -51,14 +52,12 @@ class Executable_Job(Job):
         self.server_address = server_address
         self.qlog = None
 
-
     def write_log(self, msg):
         if self.qlog == None:
             print msg
         else:
             self.qlog.write(msg + '\n')
             self.qlog.flush()
-
 
     def initialize_qlog(self):
         # open file to write qlog information, stdout, and stderr to (None: write to stdout/stderr)
@@ -143,9 +142,10 @@ class Executable_Job(Job):
         # send finalize message via tcp
         cmd = cmd + '; bash -c "echo finished:' + str(self.job_id) \
             + ' > /dev/tcp/' + self.server_address[0] + '/' + str(self.server_address[1]) + '"'
+
         # run job without waiting
         proc = subprocess.Popen(args=cmd, stdout=self.qlog, stderr=self.qlog, shell=True, preexec_fn=os.setsid)
-        timer = threading.Timer(self.requests['hours'] * 3600, self.timeout, args=[proc.pid])
+        timer = threading.Timer(self.requests['hours'] * 3600, self.timeout)
         timer.start()
         self.wait_for_message(proc.pid)
         timer.cancel()
@@ -170,6 +170,18 @@ class Executable_Job(Job):
 
 
     def register(self):
+        # @cany : number of GPUs
+        ViscomGID = 1041
+        myGroupId = pwd.getpwnam(self.user).pw_gid
+
+        try:
+            if int(str(self.requests['gpus'])) > 1 and myGroupId != ViscomGID :
+                print 'JOB DECLINED: Number of GPUs should be less than 2.'
+                exit()
+        except ValueError:
+            print 'Value error!'
+            exit()
+        
         msg = 'request:' + str(self.job_id) \
                 + ',' + self.address[0] \
                 + ',' + str(self.address[1]) \
@@ -197,7 +209,6 @@ class Executable_Job(Job):
             print reply
             exit()
 
-
 ### END EXECUTABLE JOB ###
 
 
@@ -209,17 +220,17 @@ def main():
                             help='script (plus its parameters) to be submitted. Script parameters must not start with \'-\'. If they'
                                   ' do so, pass them with quotation marks and a leading space, e.g. " --foo".')
     arg_parser.add_argument('--server_ip', type=str, default='localhost', help='ip address of the server')
-    arg_parser.add_argument('--server_port', type=int, default=1234, help='port of the server')
+    arg_parser.add_argument('--server_port', type=int, default=5090, help='port of the server')
     arg_parser.add_argument('--block_index', type=int, default=0, help='index of the block to execute')
     arg_parser.add_argument('--job_id', type=int, default=0, help='unique id of this job')
     arg_parser.add_argument('--subtask_id', type=int, default=1, help='subtask id for the selected block')
     arg_parser.add_argument('--depends_on', type=str, default='', help='comma separated list of job ids that need to be finished before this job starts')
     arg_parser.add_argument('--user', type=str, default='dummy', help='user who submitted the job')
     args = arg_parser.parse_args()
-
     script = args.script[0]
     script_params = args.script[1:]
     server_address = (args.server_ip, args.server_port)
+
     if args.depends_on == '':
         depends_on = []
     else:

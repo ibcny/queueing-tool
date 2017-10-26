@@ -16,21 +16,22 @@
 
 ### TODO: adjust these values to your needs
 ### QSERVER EXECUTABLE ###
-QSERVER_EXECUTABLE=/home/richard/pyqueue/queue/qserver
+QSERVER_EXECUTABLE=/usr/local/queueing-tool/qserver
 ### QSERVER OPTIONS    ###
-DEVICE_IDS="0,1"            # Cuda device ids, set to empty string if no GPUs available
-THREADS=8                   # number of available threads
-MEMORY=30000                # available memory in mb
+DEVICE_IDS="0,1,2,3"        # Cuda device ids, set to empty string if no GPUs available
+THREADS=40                  # number of available threads
+MEMORY=256000                # available memory in mb
 ABORT_ON_TIME_LIMIT="true"  # abort jobs if time limit is exceeded?
-PORT=1234                   # port the server listens on
+PORT=5090                   # port the server listens on
+KILL_M_ALL=0                # kills all the processes using CUDA devices
 ##########################
 
+### LEAVE THE REMAINDER OF THE SCRIPT UNCHANGED ###
 
-DAEMON_OPTS="--gpus=$DEVICE_IDS --threads=$THREADS --memory=$MEMORY --port=$PORT"
+DAEMON_OPTS="--gpus=$DEVICE_IDS --threads=$THREADS --memory=$MEMORY --port=$PORT --killall=$KILL_M_ALL "
 if [ "$ABORT_ON_TIME_LIMIT" = "true" ]; then
     DAEMON_OPTS="$DAEMON_OPTS --abort_on_time_limit"
 fi
-
 
 # Using the lsb functions to perform the operations.
 . /lib/lsb/init-functions
@@ -54,7 +55,7 @@ case "$1" in
     fi
     # start qserverd
     log_daemon_msg "Starting the process" "$NAME"
-    if start-stop-daemon --start -b --make-pidfile --quiet --oknodo --pidfile $PIDFILE --exec $DAEMON -- $DAEMON_OPTS ; then
+    if start-stop-daemon --start -b --make-pidfile --oknodo --pidfile $PIDFILE  --startas /bin/bash -- -c "exec $DAEMON $DAEMON_OPTS  > /var/log/qserver.log 2>&1"  ; then
         log_end_msg 0
     else
         log_end_msg 1
@@ -65,11 +66,11 @@ case "$1" in
     if [ -e $PIDFILE ]; then
       status_of_proc -p $PIDFILE $DAEMON "Stopping the $NAME process" && status="0" || status="$?"
       if [ "$status" = 0 ]; then
-        start-stop-daemon --stop --quiet --oknodo --pidfile $PIDFILE
+        start-stop-daemon --stop --oknodo --pidfile $PIDFILE
         /bin/rm -rf $PIDFILE
       fi
     else
-      log_daemon_msg "$NAME process is not running"
+      log_daemon_msg "$NAME process is not running__"
       log_end_msg 0
     fi
 	;;

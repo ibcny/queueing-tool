@@ -43,11 +43,11 @@ def submit_job(script, server_address, block_idx, job_id, subtask_id, depends_on
          + ' --block_index=' + str(block_idx) \
          + ' --job_id=' + str(job_id) \
          + ' --subtask_id=' + str(subtask_id) \
-         + ' --user=' + os.getlogin()
+         + ' --user=' + os.getenv('USER')
     if len(depends_on) > 0:
         args = args + ' --depends_on=' + ','.join([ str(i) for i in depends_on ])
-    os.system('./job.py' + args + ' ' + script_str + ' &')
-
+    os.system('job.py' + args + ' ' + script_str + ' &')
+    print "Job submitted to the Queue Server. Please check q.log directory to view log output.\n" 
 
 def select_blocks(script, start_block, only_start_block = False):
     b = Block_Parser()
@@ -80,11 +80,11 @@ def main():
     arg_parser.add_argument('-l','--local', action='store_true', help='Execute the script locally')
     group = arg_parser.add_mutually_exclusive_group()
     group.add_argument('-b','--block', type=str, default='', help='Only submit/execute the specified block')
-    group.add_argument('-s','--subtask', type=str, default='', nargs=2, help='Aruments for this option are a block name and a subtask id.'
+    group.add_argument('-s','--subtask', type=str, default='', nargs=2, help='Arguments for this option are a block name and a subtask id.'
                                                                   'Only submit/execute the subtask id of the specified block.')
     group.add_argument('-f','--from_block', type=str, default='', help='Submit/execute the specified block and all succeeding blocks')
     arg_parser.add_argument('--server_ip', type=str, default='localhost', help='Ip address of the server')
-    arg_parser.add_argument('--server_port', type=int, default=1234, help='Port of the server')
+    arg_parser.add_argument('--server_port', type=int, default=5090, help='Port of the server')
     args = arg_parser.parse_args()
 
     server_address = (args.server_ip, args.server_port)

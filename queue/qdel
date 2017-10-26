@@ -9,7 +9,7 @@ def main():
     
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument('--server_ip', type=str, default='localhost', help='ip address of the server')
-    arg_parser.add_argument('--server_port', type=int, default=1234, help='port of the server')
+    arg_parser.add_argument('--server_port', type=int, default=5090, help='port of the server')
     arg_parser.add_argument('jobs', type=str, nargs='+',
                             help='Jobs to be deleted. Is a space separated list of job names, user names, or jod ids. For ids, jobs ranges separated by a \'-\' are also possible.')
     # delete by id (default), name (-n), or user (-u)
@@ -41,7 +41,7 @@ def main():
             exit()
 
     server_address = (args.server_ip, args.server_port)
-    user = 'root' if os.geteuid() == 0 else os.getlogin()
+    user = 'root' if os.geteuid() == 0 else os.getenv('USER')
 
     try:
         sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )

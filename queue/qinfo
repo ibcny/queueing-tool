@@ -8,7 +8,7 @@ def main():
     
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument('--server_ip', type=str, default='localhost', help='ip address of the server')
-    arg_parser.add_argument('--server_port', type=int, default=1234, help='port of the server')
+    arg_parser.add_argument('--server_port', type=int, default=5090, help='port of the server')
     args = arg_parser.parse_args()
 
     server_address = (args.server_ip, args.server_port)
